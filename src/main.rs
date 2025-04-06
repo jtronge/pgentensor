@@ -135,9 +135,9 @@ fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
         for j in 0..count_fibers_per_slice[i] {
             for k in 0..count_nonzeros_per_fiber[fiber_idx] {
                 let value: f64 = value_distr.sample(&mut rng);
-                writeln!(&mut tensor_file, "{} {} {} {}", i,
-                         fiber_indices_per_slice[i][j],
-                         nonzero_indices_per_fiber[fiber_idx][k], value)
+                writeln!(&mut tensor_file, "{} {} {} {}", i + 1,
+                         fiber_indices_per_slice[i][j] + 1,
+                         nonzero_indices_per_fiber[fiber_idx][k] + 1, value)
                     .expect("failed to write tensor entry");
             }
             fiber_idx += 1;
