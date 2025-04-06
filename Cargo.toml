@@ -1,0 +1,9 @@
+[package]
+name = "pgentensor"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+rand = "0.9.0"
+rand_distr = "0.5.1"
+clap = { version = "4.5.35", features = ["derive"] }
