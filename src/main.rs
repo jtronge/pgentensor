@@ -7,7 +7,7 @@ use std::io::prelude::*;
 use std::io::BufWriter;
 use clap::Parser;
 use rand::prelude::*;
-use rand_distr::{Normal, StandardNormal, Uniform};
+use rand_distr::{Normal, Uniform};
 
 struct TensorOptions {
     /// Tensor dimensions (3-way tensors only for now)
@@ -83,16 +83,6 @@ fn distribute<R: Rng>(n: usize, mean: f64, std_dev: f64, max: usize, limit: usiz
     (counts, inds)
 }
 
-/// Compute a prefix sum of the number of fibers per slice.
-fn prefix_sum(count: &[usize]) -> Vec<usize> {
-    let mut psum = vec![0];
-    // TODO: Parallelize this
-    for i in 1..count.len() {
-        psum.push(psum[i - 1] + count[i - 1]);
-    }
-    psum
-}
-
 /// Generate a tensor based on the input metrics.
 ///
 /// Based on the following paper:
@@ -138,7 +128,6 @@ fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
     let f = std::fs::File::create(tensor_fname).expect("failed to create file");
     let mut tensor_file = BufWriter::new(f);
     let value_distr = Uniform::new(0.0, 1.0).expect("failed to create uniform distribution for tensor values");
-    let true_nnz: usize = count_nonzeros_per_fiber.iter().sum();
     // Iterate over all slices
     let mut fiber_idx = 0;
     for i in 0..slice_count {
