@@ -5,6 +5,7 @@
 use std::path::Path;
 use std::io::prelude::*;
 use std::io::BufWriter;
+use std::collections::HashSet;
 use clap::Parser;
 use rand::prelude::*;
 use rand_distr::{Normal, Uniform};
@@ -130,19 +131,28 @@ fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
     let value_distr = Uniform::new(0.0, 1.0).expect("failed to create uniform distribution for tensor values");
     // Iterate over all slices
     let mut fiber_idx = 0;
+    let mut total_nnz = 0;
     for i in 0..slice_count {
+        let mut slice_coords = HashSet::new();
         // Iterate over all fibers of this slice
         for j in 0..count_fibers_per_slice[i] {
             for k in 0..count_nonzeros_per_fiber[fiber_idx] {
                 let value: f64 = value_distr.sample(&mut rng);
-                writeln!(&mut tensor_file, "{} {} {} {}", i + 1,
-                         fiber_indices_per_slice[i][j] + 1,
-                         nonzero_indices_per_fiber[fiber_idx][k] + 1, value)
+                let co = (fiber_indices_per_slice[i][j], nonzero_indices_per_fiber[fiber_idx][k]);
+                // Skip duplicate coordinates
+                if slice_coords.contains(&co) {
+                    continue;
+                }
+                writeln!(&mut tensor_file, "{} {} {} {}", i + 1, co.0 + 1, co.1 + 1, value)
                     .expect("failed to write tensor entry");
+                slice_coords.insert(co);
             }
             fiber_idx += 1;
         }
+        total_nnz += slice_coords.len();
     }
+    println!("requested nonzero count: {}", nnz);
+    println!("generated nonzero count: {}", total_nnz);
 }
 
 /// Synthetic tensor generator tool
