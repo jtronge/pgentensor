@@ -37,7 +37,21 @@ fn randinds<R: Rng>(n: usize, limit: usize, rng: &mut R) -> Vec<usize> {
 
 /// Implementation of the distribute function from the "A Sparse Tensor Generator
 /// with Efficient Feature Extraction".
-fn distribute<R: Rng>(n: usize, mean: f64, std_dev: f64, max: usize, limit: usize, rng: &mut R) -> (Vec<usize>, Vec<Vec<usize>>) {
+///
+/// n: total number of counts to generate
+/// mean: the mean of the count expected
+/// std_dev: standard deviation of the count
+/// max: the maximum count value possible
+/// index_limit: for each count, generates count indices uniformly in range [0, limit-1]
+/// rng: random number generator
+fn distribute<R: Rng>(
+    n: usize,
+    mean: f64,
+    std_dev: f64,
+    max: usize,
+    index_limit: usize,
+    rng: &mut R,
+) -> (Vec<usize>, Vec<Vec<usize>>) {
     // Check whether the normal distribution could generate many negative values
     let use_normal = mean > (3.0 * std_dev);
     let distr = if use_normal {
@@ -76,9 +90,9 @@ fn distribute<R: Rng>(n: usize, mean: f64, std_dev: f64, max: usize, limit: usiz
     for count in counts.iter_mut() {
         *count = std::cmp::min(*count, max);
         *count = std::cmp::max(*count, 1);
-        // Create an array of size counts[i] all in the range [1, limit] ---
+        // Create an array of size counts[i] all in the range [1, index_limit] ---
         // this is done with a uniform distribution here
-        inds.push(randinds(*count, limit, rng));
+        inds.push(randinds(*count, index_limit, rng));
     }
 
     (counts, inds)
@@ -92,23 +106,40 @@ fn distribute<R: Rng>(n: usize, mean: f64, std_dev: f64, max: usize, limit: usiz
 fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
     let nnz = (tensor_opts.nnz_density * (tensor_opts.dims[0] * tensor_opts.dims[1]
                                           * tensor_opts.dims[2]) as f64) as usize;
+    // Focus on generating mode-(2, 3) slices, that is slices where i is fixed
+    // and the other modes vary (indexing of X(i, :, :)).
     let slice_count = tensor_opts.dims[0];
-    assert!(nnz >= slice_count);
+    assert!(nnz > slice_count);
+
+    // This focuses on the mode-2 fibers, that is fibers X(i, :, k), where i and
+    // k are fixed, but the middle index j can vary. Each of these fibers can
+    // therefore have most tensor_opts.dims[1] nonzeros and there are
+    // (tensor_opts.dims[0] * tensor_opts.dims[2]) possible tensors total.
     let nonzero_fiber_count = (tensor_opts.fiber_density
-                               * (slice_count * tensor_opts.dims[1]) as f64) as usize;
+                               * (slice_count * tensor_opts.dims[2]) as f64) as usize;
     let mean_fibers_per_slice = nonzero_fiber_count as f64 / slice_count as f64;
     let std_dev_fibers_per_slice = tensor_opts.cv_fibers_per_slice * mean_fibers_per_slice;
-    let max_fibers_per_slice = tensor_opts.dims[1];
+    // We can have a maximum of tensor_opts.dims[2] fibers per slice (can be
+    // thought of as columns of the tensor_opts.dims[1] x tensor_opts.dims[2] matrix X(i, :, :)).
+    let max_fibers_per_slice = tensor_opts.dims[2];
+    let max_nonzeros_per_fiber = tensor_opts.dims[1];
 
     // Choose random indices for the slices
+    // TODO: We need a deterministic and portable RNG here (see
+    // https://rust-random.github.io/book/crate-reprod.html#crate-versions).
+    // It looks like ChaCha20Rng could be useful (see
+    // https://rust-random.github.io/book/guide-seeding.html#the-seed-type)
     let mut rng = rand::rng();
-    // Distribute the number and indices of fibers per slice
-    let (count_fibers_per_slice, fiber_indices_per_slice) = distribute(
+    // Now we need to carefully choose the number of nonzero fibers per slices.
+    // This is slightly different from the original GenTensor paper, since here
+    // I'm assuming that we never have non-empty slices (which is in practice
+    // what SPLATT expects).
+    let (count_fibers_per_slice, fiber_indices) = distribute(
         slice_count,
         mean_fibers_per_slice,
         std_dev_fibers_per_slice,
         max_fibers_per_slice,
-        tensor_opts.dims[1],
+        max_nonzeros_per_fiber,
         &mut rng
     );
     let true_nonzero_fiber_count: usize = count_fibers_per_slice.iter().sum();
@@ -116,13 +147,19 @@ fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
     // Compute nonzeros per fiber
     let mean_nonzeros_per_fiber = nnz as f64 / nonzero_fiber_count as f64;
     let std_dev_nonzeros_per_fiber = tensor_opts.cv_nonzeros_per_fiber * mean_nonzeros_per_fiber;
-    let max_nonzeros_per_fiber = tensor_opts.dims[2];
-    let (count_nonzeros_per_fiber, nonzero_indices_per_fiber) = distribute(
+    // What this is actually generating here: count_nonzeros_per_fiber should be
+    // a an array of length true_nonzero_fiber_count with counts distributed
+    // according to mean_nonzeros_per_fiber and std_dev_nonzeros_per_fiber
+    // (with a max of max_nonzeros_per_fiber). For each count generated, that is
+    // for each nonzero fiber, nonzero_indices generates uniform indices on
+    // [0, max_fibers_per_slice-1]; NOTE: this doesn't correspond exactly as
+    // you would think to each fiber.
+    let (count_nonzeros_per_fiber, nonzero_indices) = distribute(
         true_nonzero_fiber_count,
         mean_nonzeros_per_fiber,
         std_dev_nonzeros_per_fiber,
         max_nonzeros_per_fiber,
-        tensor_opts.dims[2],
+        max_fibers_per_slice,
         &mut rng,
     );
 
@@ -138,7 +175,7 @@ fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
         for j in 0..count_fibers_per_slice[i] {
             for k in 0..count_nonzeros_per_fiber[fiber_idx] {
                 let value: f64 = value_distr.sample(&mut rng);
-                let co = (fiber_indices_per_slice[i][j], nonzero_indices_per_fiber[fiber_idx][k]);
+                let co = (fiber_indices[i][j], nonzero_indices[fiber_idx][k]);
                 // Skip duplicate coordinates
                 if slice_coords.contains(&co) {
                     continue;
