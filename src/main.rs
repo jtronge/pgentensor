@@ -46,15 +46,11 @@ fn distribute<R: Rng>(
     limit: usize,
     rng: &mut R,
 ) -> (Vec<usize>, Vec<Vec<usize>>) {
-    println!("number of slices: {}", n);
-    println!("mean number of fibers per slice: {}", mean);
     // Check whether the normal distribution could generate many negative values
     let use_normal = mean > (3.0 * std_dev);
     let distr = if use_normal {
-        println!("normal");
         Normal::new(mean, std_dev)
     } else {
-        println!("log-normal");
         // Use log-normal only if there is potential for a lot of negative values
         let mean_log_norm = (mean * mean / (mean * mean + std_dev * std_dev).sqrt()).ln();
         let std_dev_log_norm = (1.0 + std_dev * std_dev / (mean * mean)).ln().sqrt();
@@ -63,10 +59,7 @@ fn distribute<R: Rng>(
     let distr = distr.expect("failed to create distribution");
 
     // Generate the counts
-    println!("before generating counts");
     let mut counts = vec![];
-    println!("mean: {}", mean);
-    println!("std_dev: {}", std_dev);
     for _ in 0..n {
         let count = if use_normal {
             // Use a normal distribution
@@ -79,24 +72,17 @@ fn distribute<R: Rng>(
         let count = if count > max { max } else { count };
         counts.push(count);
     }
-    println!("after generating counts: counts.len() = {}", counts.len());
-    println!("total count values: {}", counts.iter().sum::<usize>());
 
     // Compare the computed mean with desired mean and scale if it doesn't match exactly
     let total: usize = counts.iter().sum();
     let ratio = count_requested as f64 / total as f64;
-    println!("count_requested: {}", count_requested);
-    println!("total: {}", total);
-    println!("ratio computed: {}", ratio);
     if ratio < 0.95 || ratio > 1.05 {
         for count in &mut counts {
             *count = ((*count as f64) * ratio) as usize;
         }
     }
-    println!("total count values (now): {}", counts.iter().sum::<usize>());
 
     // Now generate random indices
-    println!("before generating random indices");
     let mut inds = vec![];
     let mut total = 0;
     for count in counts.iter_mut() {
@@ -109,7 +95,6 @@ fn distribute<R: Rng>(
         // this is done with a uniform distribution here
         inds.push(randinds(*count, limit, rng));
     }
-    println!("after generating random indices");
 
     (counts, inds)
 }
@@ -122,25 +107,20 @@ fn distribute<R: Rng>(
 fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
     let nnz = (tensor_opts.nnz_density * (tensor_opts.dims[0] * tensor_opts.dims[1]
                                           * tensor_opts.dims[2]) as f64) as usize;
-    println!("nnz: {}", nnz);
     let slice_count = tensor_opts.dims[0];
-    // assert!(nnz >= slice_count);
     let nonzero_fiber_count = (tensor_opts.fiber_density
                                * (slice_count * tensor_opts.dims[1]) as f64) as usize;
-    println!("nonzero_fiber_count: {}", nonzero_fiber_count);
     let mean_fibers_per_slice = nonzero_fiber_count as f64 / slice_count as f64;
     let std_dev_fibers_per_slice = tensor_opts.cv_fibers_per_slice * mean_fibers_per_slice;
     let max_fibers_per_slice = tensor_opts.dims[1];
-    println!("nonzero_fiber_count: {}", nonzero_fiber_count);
-    println!("mean_fibers_per_slice: {}", mean_fibers_per_slice);
-    println!("expected number of fiber indices: {}",
-             (slice_count as f64 * mean_fibers_per_slice) as usize);
-    // assert!(nonzero_fiber_count <= nnz);
 
     // Choose random indices for the slices
+    // TODO: We need a deterministic and portable RNG here (see
+    // https://rust-random.github.io/book/crate-reprod.html#crate-versions).
+    // It looks like ChaCha20Rng could be useful (see
+    // https://rust-random.github.io/book/guide-seeding.html#the-seed-type)
     let mut rng = rand::rng();
     // Distribute the number and indices of fibers per slice
-    println!("before first distribute");
     let (count_fibers_per_slice, fiber_indices_per_slice) = distribute(
         slice_count,
         nonzero_fiber_count,
@@ -150,15 +130,12 @@ fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
         tensor_opts.dims[1],
         &mut rng
     );
-    println!("after first distribute");
     let true_nonzero_fiber_count: usize = count_fibers_per_slice.iter().sum();
-    println!("true_nonzero_fiber_count: {}", true_nonzero_fiber_count);
 
     // Compute nonzeros per fiber
     let mean_nonzeros_per_fiber = nnz as f64 / nonzero_fiber_count as f64;
     let std_dev_nonzeros_per_fiber = tensor_opts.cv_nonzeros_per_fiber * mean_nonzeros_per_fiber;
     let max_nonzeros_per_fiber = tensor_opts.dims[2];
-    println!("before second distribute");
     let (count_nonzeros_per_fiber, nonzero_indices_per_fiber) = distribute(
         true_nonzero_fiber_count,
         nnz,
@@ -168,13 +145,6 @@ fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
         tensor_opts.dims[2],
         &mut rng,
     );
-    println!("mean_nonzeros_per_fiber (desired): {}", mean_nonzeros_per_fiber);
-    println!("mean_nonzeros_per_fiber (calculated): {}",
-             count_nonzeros_per_fiber.iter().sum::<usize>() as f64 / count_nonzeros_per_fiber.len() as f64);
-    println!("total nonzeros (as sum of counts): {}", count_nonzeros_per_fiber.iter().sum::<usize>());
-    println!("after second distribute");
-
-    println!("starting to write file");
     let f = std::fs::File::create(tensor_fname).expect("failed to create file");
     let mut tensor_file = BufWriter::new(f);
     let value_distr = Uniform::new(0.0, 1.0).expect("failed to create uniform distribution for tensor values");
@@ -200,8 +170,6 @@ fn gentensor<P: AsRef<Path>>(tensor_fname: P, tensor_opts: TensorOptions) {
         }
         total_nnz += slice_coords.len();
     }
-    println!("requested nonzero count: {}", nnz);
-    println!("generated nonzero count: {}", total_nnz);
 }
 
 /// Synthetic tensor generator tool
